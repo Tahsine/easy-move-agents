@@ -1,0 +1,25 @@
+# --- Backend / Python ---
+live_agents/.env.local
+live_agents/.env
+live_agents/__pycache__/
+live_agents/.adk/
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Environnements globaux (au cas où) ---
+.env
+.env.local
+venv/
+ENV/
+bin/
+lib/
+
+# --- OS / Divers ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.adk/
