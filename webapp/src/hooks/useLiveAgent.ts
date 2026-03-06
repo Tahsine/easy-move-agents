@@ -1,17 +1,23 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
+
+export type SpeakingState = 'idle' | 'user' | 'agent';
 
 export interface Message {
     id: string;
-    role: "user" | "assistant" | "system";
+    role: 'user' | 'assistant' | 'system';
     content: string;
+    partial?: boolean;
+    timestamp: number;
 }
 
 export function useLiveAgent() {
-    const [messages, setMessages] = useState<Message[]>([
-        { id: "1", role: "system", content: "Kaline Zephyr Agent prêt. Cliquez sur le bouton pour démarrer." }
-    ]);
+    const [messages, setMessages] = useState<Message[]>([]);
     const [isConnected, setIsConnected] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
+    const [speakingState, setSpeakingState] = useState<SpeakingState>('idle');
+    const [micEnabled, setMicEnabled] = useState(true);
+    const [screenShareEnabled, setScreenShareEnabled] = useState(false);
+    const [webInteractionEnabled, setWebInteractionEnabled] = useState(true);
     const [needsPermission, setNeedsPermission] = useState(false);
     const [sessionId, setSessionId] = useState(() => "session-" + Math.random().toString(36).substring(7));
 
@@ -21,6 +27,13 @@ export function useLiveAgent() {
     const streamRef = useRef<MediaStream | null>(null);
     const playerNodeRef = useRef<AudioWorkletNode | null>(null); // For playback
     const playerContextRef = useRef<AudioContext | null>(null); // For playback (24kHz)
+    const micEnabledRef = useRef(micEnabled);
+
+    // Keep micEnabledRef in sync safely
+    useEffect(() => {
+        console.log("🎤 Mic Enbaled state changed to:", micEnabled);
+        micEnabledRef.current = micEnabled;
+    }, [micEnabled]);
 
     const stopAudio = useCallback(() => {
         if (streamRef.current) {
@@ -48,7 +61,7 @@ export function useLiveAgent() {
         socket.onopen = async () => {
             console.log("WebSocket connection opened.");
             setIsConnected(true);
-            setMessages(prev => [...prev, { id: Date.now().toString(), role: "system", content: "Connecté au serveur ADK." }]);
+            setMessages(prev => [...prev, { id: Date.now().toString(), role: "system", content: "Connecté au serveur ADK.", timestamp: Date.now() }]);
 
             // Initialize Player as soon as we connect so we can hear the agent
             if (!playerNodeRef.current) {
@@ -92,29 +105,69 @@ export function useLiveAgent() {
                     for (const part of data.content.parts) {
                         const inlineData = part.inlineData || part.inline_data;
                         if (inlineData?.mimeType?.startsWith("audio/pcm") || inlineData?.mime_type?.startsWith("audio/pcm")) {
+                            setSpeakingState('agent');
                             if (playerNodeRef.current) {
                                 const audioBuffer = base64ToArray(inlineData.data);
                                 playerNodeRef.current.port.postMessage(audioBuffer);
                             }
                         }
 
-                        // Handle text response
+                        // Handle agent text (output_transcription)
                         if (part.text) {
-                            // Skip thoughts (internal reasoning)
                             if (part.thought) continue;
-
                             const text = part.text;
                             setMessages(prev => {
                                 const lastMsg = prev[prev.length - 1];
-                                if (lastMsg && lastMsg.role === "assistant") {
-                                    // Append to the last assistant message
+                                if (lastMsg && lastMsg.role === "assistant" && !lastMsg.content.includes("[Interrompu]")) {
                                     return [...prev.slice(0, -1), { ...lastMsg, content: lastMsg.content + text }];
                                 }
-                                // Create a new assistant message bubble
-                                return [...prev, { id: Date.now().toString(), role: "assistant", content: text }];
+                                return [...prev, { id: Date.now().toString(), role: "assistant", content: text, timestamp: Date.now() }];
                             });
                         }
                     }
+                }
+
+                // Handle Input Transcription (User speaking)
+                if (data.input_transcription) {
+                    const transcription = data.input_transcription;
+                    if (transcription.text) {
+                        setSpeakingState('user');
+                        setMessages(prev => {
+                            const lastMsg = prev[prev.length - 1];
+                            // If last message is a partial user transcription, update it
+                            if (lastMsg && lastMsg.role === "user" && lastMsg.partial) {
+                                return [...prev.slice(0, -1), {
+                                    ...lastMsg,
+                                    content: transcription.text,
+                                    partial: data.partial !== false // If standard ADK, might be in root
+                                }];
+                            }
+                            // Otherwise create new user message
+                            return [...prev, {
+                                id: "user-" + Date.now(),
+                                role: "user",
+                                content: transcription.text,
+                                partial: true,
+                                timestamp: Date.now()
+                            }];
+                        });
+                    }
+                }
+
+                // Handle Output Transcription (Agent fallback/extra)
+                if (data.output_transcription) {
+                    const transcription = data.output_transcription;
+                    if (transcription.text) {
+                        setSpeakingState('agent');
+                        // Logic similar to part.text but for explicit transcription events
+                    }
+                }
+
+                // Reset state on turn complete
+                if (data.turn_complete || data.turnComplete) {
+                    setSpeakingState('idle');
+                    // Finalize partial messages
+                    setMessages(prev => prev.map(m => m.partial ? { ...m, partial: false } : m));
                 }
 
             } catch (e) {
@@ -154,17 +207,30 @@ export function useLiveAgent() {
 
             // Send the text message
             socketRef.current.send(JSON.stringify({ type: "text", text }));
-            setMessages(prev => [...prev, { id: Date.now().toString(), role: "user", content: text }]);
+            setMessages(prev => [...prev, { id: Date.now().toString(), role: "user", content: text, timestamp: Date.now() }]);
         }
     }, []);
 
-    const startAudio = async () => {
+    const startAudio = useCallback(async () => {
+        if (isRecording || audioContextRef.current) {
+            console.log("⚠️ Audio already recording, skipping startAudio");
+            return;
+        }
+
         try {
-            // Reset state
+            console.log("🎤 Starting audio system...");
             setNeedsPermission(false);
 
-            // Request permission first
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+            // Request permission with optimized constraints
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    sampleRate: 16000
+                }
+            });
             streamRef.current = stream;
 
             // Setup audio context for recording (16kHz as expected by Gemini)
@@ -181,22 +247,30 @@ export function useLiveAgent() {
             // Handle incoming PCM data from the worklet
             recorderNode.port.onmessage = (event) => {
                 if (socketRef.current?.readyState === WebSocket.OPEN) {
-                    const pcmData = convertFloat32ToPCM(event.data);
-                    // Send raw binary buffer directly
-                    socketRef.current.send(pcmData);
+                    if (micEnabledRef.current) {
+                        const pcmData = convertFloat32ToPCM(event.data);
+                        socketRef.current.send(pcmData);
+                    } else {
+                        // Optional: maybe send zeroed data if the agent expects continuous stream
+                        // But usually just skipping is fine for Gemini VAD if turn isn't active
+                    }
                 }
             };
 
             audioWorkletNodeRef.current = recorderNode;
-
-            // We set isRecording to true only *after* everything is cleanly setup
             setIsRecording(true);
+            console.log("✅ Audio system active.");
 
-        } catch (err: any) {
+            // Crucial: ensure context is running
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+
+        } catch (err: unknown) {
             console.error("Microphone access failed:", err);
             stopAudio(); // Cleanup on failure
 
-            if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+            if (err instanceof Error && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError")) {
                 setNeedsPermission(true);
                 // Open permission page if in extension context
                 const _chrome = (window as any).chrome;
@@ -205,7 +279,7 @@ export function useLiveAgent() {
                 }
             }
         }
-    };
+    }, [stopAudio]);
 
     const disconnect = useCallback(() => {
         setIsConnected(false);
@@ -228,6 +302,13 @@ export function useLiveAgent() {
         messages,
         isConnected,
         isRecording,
+        speakingState,
+        micEnabled,
+        setMicEnabled,
+        screenShareEnabled,
+        setScreenShareEnabled,
+        webInteractionEnabled,
+        setWebInteractionEnabled,
         needsPermission,
         connect,
         disconnect,

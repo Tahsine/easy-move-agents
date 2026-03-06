@@ -1,168 +1,104 @@
-import { useState, useEffect, useRef } from "react";
-import { Send, Mic, MicOff, Monitor, Settings, Paperclip, Power, PowerOff } from "lucide-react";
-import { useLiveAgent } from "./hooks/useLiveAgent";
+import { useEffect } from 'react';
+import { useLiveAgent } from './hooks/useLiveAgent';
+import TranscriptZone from './components/TranscriptZone';
+import VoiceWaveform from './components/VoiceWaveform';
+import ControlButtons from './components/ControlButtons';
+import { Power } from 'lucide-react';
 
-export default function App() {
+function App() {
   const {
     messages,
     isConnected,
-    isRecording,
+    speakingState,
+    micEnabled,
+    setMicEnabled,
+    screenShareEnabled,
+    setScreenShareEnabled,
+    webInteractionEnabled,
+    setWebInteractionEnabled,
     needsPermission,
     connect,
     disconnect,
-    sendMessage,
     startAudio,
     stopAudio
   } = useLiveAgent();
 
-  const [input, setInput] = useState("");
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  // Force connection on startup or via button
+  const handlePower = () => {
+    if (isConnected) {
+      disconnect();
+    } else {
+      connect();
     }
-  }, [messages]);
-
-  const handleSend = () => {
-    if (!input.trim()) return;
-    sendMessage(input);
-    setInput("");
   };
 
-  const toggleRecording = () => {
-    if (isRecording) stopAudio();
-    else startAudio();
-  };
+  // Automatically start audio when connected (if permissions allow)
+  useEffect(() => {
+    if (isConnected) {
+      startAudio();
+    } else {
+      stopAudio();
+    }
+  }, [isConnected, startAudio, stopAudio]);
 
   return (
-    <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans selection:bg-blue-500/30">
-      {/* Header */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-neutral-800 bg-neutral-950/50 backdrop-blur-md sticky top-0 z-10">
-        <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-500 animate-pulse" : "bg-red-500"}`} />
-          <h1 className="font-semibold text-sm tracking-tight text-neutral-200">Kaline Zephyr</h1>
-          {needsPermission && (
-            <span className="text-[10px] text-yellow-500 animate-pulse ml-2">Micro bloqué !</span>
-          )}
+    <div className="flex flex-col h-screen w-full bg-[#080808] text-white selection:bg-[#3B8BFF]/30">
+      {/* Header - Minimalist */}
+      <header className="h-[50px] flex items-center justify-between px-6 border-b border-white/5 shrink-0">
+        <div className="flex items-center gap-3">
+          <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+          <h1 className="text-[14px] font-semibold tracking-tight text-white/90">Kaline Zephyr</h1>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => isConnected ? disconnect() : connect()}
-            className={`p-1.5 rounded-lg transition-colors ${isConnected ? "text-red-400 hover:bg-red-500/10" : "text-green-400 hover:bg-green-500/10"}`}
-            title={isConnected ? "Déconnecter" : "Connecter"}
-          >
-            {isConnected ? <PowerOff size={16} /> : <Power size={16} />}
-          </button>
-          <button className="p-1.5 hover:bg-neutral-800 rounded-lg transition-colors text-neutral-400">
-            <Settings size={16} />
-          </button>
-        </div>
+
+        <button
+          onClick={handlePower}
+          className={`p-2 rounded-full transition-all duration-300 ${isConnected ? 'text-green-500 hover:bg-green-500/10' : 'text-white/40 hover:text-white hover:bg-white/5'}`}
+        >
+          <Power size={20} />
+        </button>
       </header>
 
-      {/* Messages Area */}
-      <main
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto p-4 space-y-6 scrollbar-none"
-      >
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} animate-in fade-in slide-in-from-bottom-2 duration-300`}
-          >
-            <div
-              className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${msg.role === "user"
-                ? "bg-blue-600 text-white rounded-tr-none shadow-lg shadow-blue-500/10"
-                : msg.role === "system"
-                  ? "bg-neutral-900 border border-neutral-800 text-neutral-400 italic text-[10px] w-full text-center"
-                  : "bg-neutral-900 border border-neutral-800 text-neutral-100 rounded-tl-none whitespace-pre-wrap"
-                }`}
+      {/* Main Content: Three Zones */}
+      <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
+        {/* Permission Banner */}
+        {needsPermission && (
+          <div className="absolute top-0 left-0 right-0 z-50 bg-blue-600/90 backdrop-blur-md p-4 flex flex-col items-center text-center gap-3 animate-in fade-in slide-in-from-top-4 duration-500">
+            <p className="text-[13px] font-medium text-white shadow-sm">
+              L'accès au microphone est requis.
+            </p>
+            <button
+              onClick={() => startAudio()}
+              className="px-4 py-2 bg-white text-blue-600 rounded-lg text-[12px] font-bold hover:bg-blue-50 transition-colors shadow-lg"
             >
-              {msg.content}
-            </div>
+              Autoriser le micro
+            </button>
           </div>
-        ))}
+        )}
+
+        {/* Zone 1: Transcriptions */}
+        <TranscriptZone messages={messages} />
+
+        {/* Zone 2: Waveform */}
+        <VoiceWaveform speakingState={speakingState} />
+
+        {/* Zone 3: Controls */}
+        <ControlButtons
+          micEnabled={micEnabled}
+          onToggleMic={() => setMicEnabled(!micEnabled)}
+          screenShareEnabled={screenShareEnabled}
+          onToggleScreen={() => setScreenShareEnabled(!screenShareEnabled)}
+          webInteractionEnabled={webInteractionEnabled}
+          onToggleWeb={() => setWebInteractionEnabled(!webInteractionEnabled)}
+        />
       </main>
 
-      {/* Input Area */}
-      <footer className="p-4 bg-neutral-950 border-t border-neutral-800">
-        <div className="flex flex-col gap-3">
-          {/* Action Buttons */}
-          <div className="flex items-center gap-2 px-1">
-            <button
-              disabled={!isConnected}
-              className="flex items-center gap-1.5 text-[10px] font-medium text-neutral-400 hover:text-neutral-200 transition-colors uppercase tracking-wider disabled:opacity-30"
-            >
-              <Monitor size={14} />
-              Partager l'écran
-            </button>
-            <div className="w-px h-3 bg-neutral-800 mx-1" />
-            <button
-              disabled={!isConnected}
-              className="text-[10px] font-medium text-neutral-400 hover:text-neutral-200 transition-colors uppercase tracking-wider disabled:opacity-30"
-            >
-              Mode Texte
-            </button>
-          </div>
-
-          {/* Input Box */}
-          <div className="relative group">
-            <div className="absolute inset-0 bg-blue-500/5 rounded-xl blur-xl group-focus-within:bg-blue-500/10 transition-all duration-500" />
-            <div className="relative flex flex-col gap-2 bg-neutral-900 border border-neutral-800 rounded-xl p-2 focus-within:border-neutral-700 transition-all shadow-inner">
-              {needsPermission && (
-                <div className="px-2 py-1 bg-yellow-500/10 border border-yellow-500/20 rounded-lg text-[10px] text-yellow-500 flex items-center justify-between">
-                  <span>Autorisation micro requise dans l'onglet</span>
-                  <button
-                    onClick={() => window.open(((window as any).chrome).runtime.getURL("permissions.html"), "_blank")}
-                    className="underline font-bold"
-                  >
-                    Ouvrir
-                  </button>
-                </div>
-              )}
-              <div className="flex items-end gap-2">
-                <button disabled={!isConnected} className="p-2 text-neutral-500 hover:text-neutral-300 transition-colors disabled:opacity-30">
-                  <Paperclip size={18} />
-                </button>
-
-                <textarea
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())}
-                  placeholder={isConnected ? "Message à Kaline..." : "Connectez-vous pour parler..."}
-                  disabled={!isConnected}
-                  rows={1}
-                  className="flex-1 bg-transparent border-none focus:ring-0 text-sm py-2 resize-none max-h-32 placeholder:text-neutral-600 disabled:cursor-not-allowed"
-                />
-
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={toggleRecording}
-                    disabled={!isConnected}
-                    className={`p-2 rounded-lg transition-all ${isRecording
-                      ? "bg-red-500/10 text-red-500 animate-pulse"
-                      : "text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800 disabled:opacity-30"
-                      }`}
-                  >
-                    {isRecording ? <MicOff size={18} /> : <Mic size={18} />}
-                  </button>
-
-                  <button
-                    onClick={handleSend}
-                    disabled={!input.trim() || !isConnected}
-                    className={`p-2 rounded-lg transition-all ${input.trim() && isConnected
-                      ? "bg-blue-600 text-white shadow-lg shadow-blue-500/20"
-                      : "text-neutral-600 cursor-not-allowed"
-                      }`}
-                  >
-                    <Send size={18} />
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* Footer / Status Bar - Optional */}
+      <footer className="h-[20px] bg-black/50 border-t border-white/5 flex items-center px-4 justify-between">
+        <span className="text-[9px] text-white/20 uppercase tracking-widest font-bold">Live Bidi Session</span>
+        <span className="text-[9px] text-white/20 uppercase tracking-widest font-bold">16k / 24k PCM</span>
       </footer>
     </div>
   );
 }
+
+export default App;
