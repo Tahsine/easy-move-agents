@@ -1,0 +1,198 @@
+import asyncio
+import base64
+import json
+import logging
+import warnings
+from pathlib import Path
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from google.adk.agents.live_request_queue import LiveRequestQueue
+from google.adk.agents.run_config import RunConfig, StreamingMode
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types
+
+# Load environment variables from .env file BEFORE importing agent
+load_dotenv(Path(__file__).parent / ".env.local")
+
+# Import agent after loading environment variables
+# pylint: disable=wrong-import-position
+from live_agents.agent import root_agent  # noqa: E402
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# Suppress Pydantic serialization warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
+
+# Application name constant
+APP_NAME = "live-agent-demo"
+
+# ========================================
+# Phase 1: Application Initialization (once at startup)
+# ========================================
+
+app = FastAPI()
+
+# Define your session service
+session_service = InMemorySessionService()
+
+# Define your runner
+runner = Runner(app_name=APP_NAME, agent=root_agent, session_service=session_service)
+
+# ========================================
+# WebSocket Endpoint
+# ========================================
+
+@app.websocket("/ws/{user_id}/{session_id}")
+async def websocket_endpoint(
+    websocket: WebSocket,
+    user_id: str,
+    session_id: str,
+    proactivity: bool = False,
+    affective_dialog: bool = False,
+) -> None:
+    """WebSocket endpoint for bidirectional streaming with ADK.
+
+    Args:
+        websocket: The WebSocket connection
+        user_id: User identifier
+        session_id: Session identifier
+        proactivity: Enable proactive audio (native audio models only)
+        affective_dialog: Enable affective dialog (native audio models only)
+    """
+    logger.debug(
+        f"WebSocket connection request: user_id={user_id}, session_id={session_id}, "
+        f"proactivity={proactivity}, affective_dialog={affective_dialog}"
+    )
+    await websocket.accept()
+    logger.debug("WebSocket connection accepted")
+
+    # ========================================
+    # Phase 2: Session Initialization (once per streaming session)
+    # ========================================
+
+    # Automatically determine response modality based on model architecture
+    model_name = root_agent.model
+    is_native_audio = "native-audio" in model_name.lower()
+
+    if is_native_audio:
+        response_modalities = ["AUDIO"]
+        run_config = RunConfig(
+            streaming_mode=StreamingMode.BIDI,
+            response_modalities=response_modalities,
+            input_audio_transcription=types.AudioTranscriptionConfig(),
+            output_audio_transcription=types.AudioTranscriptionConfig(),
+            session_resumption=types.SessionResumptionConfig(),
+            proactivity=(
+                types.ProactivityConfig(proactive_audio=True) if proactivity else None
+            ),
+            enable_affective_dialog=affective_dialog if affective_dialog else None,
+        )
+    else:
+        response_modalities = ["TEXT"]
+        run_config = RunConfig(
+            streaming_mode=StreamingMode.BIDI,
+            response_modalities=response_modalities,
+            input_audio_transcription=None,
+            output_audio_transcription=None,
+            session_resumption=types.SessionResumptionConfig(),
+        )
+    logger.debug(f"RunConfig created: {run_config}")
+
+    # Get or create session
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=session_id
+    )
+    if not session:
+        await session_service.create_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
+        )
+
+    live_request_queue = LiveRequestQueue()
+
+    # ========================================
+    # Phase 3: Active Session (concurrent bidirectional communication)
+    # ========================================
+
+    async def upstream_task() -> None:
+        """Receives messages from WebSocket and sends to LiveRequestQueue."""
+        logger.debug("upstream_task started")
+        while True:
+            # Receive message from WebSocket (text or binary)
+            message = await websocket.receive()
+
+            # Handle binary frames (audio data)
+            if "bytes" in message:
+                audio_data = message["bytes"]
+                logger.debug(f"Received binary audio chunk: {len(audio_data)} bytes")
+                audio_blob = types.Blob(
+                    mime_type="audio/pcm;rate=16000", data=audio_data
+                )
+                live_request_queue.send_realtime(audio_blob)
+
+            # Handle text frames (JSON messages)
+            elif "text" in message:
+                text_data = message["text"]
+                json_message = json.loads(text_data)
+
+                # Extract text from JSON and send to LiveRequestQueue
+                if json_message.get("type") == "text":
+                    content = types.Content(
+                        parts=[types.Part(text=json_message["text"])]
+                    )
+                    live_request_queue.send_content(content)
+                elif json_message.get("type") == "interrupt":
+                    live_request_queue.interrupt()
+
+                # Handle image data
+                elif json_message.get("type") == "image":
+                    image_data = base64.b64decode(json_message["data"])
+                    mime_type = json_message.get("mimeType", "image/jpeg")
+                    image_blob = types.Blob(mime_type=mime_type, data=image_data)
+                    live_request_queue.send_realtime(image_blob)
+
+    async def downstream_task() -> None:
+        """Receives Events from run_live() and sends to WebSocket."""
+        logger.debug("downstream_task started, calling runner.run_live()")
+        async for event in runner.run_live(
+            user_id=user_id,
+            session_id=session_id,
+            live_request_queue=live_request_queue,
+            run_config=run_config,
+        ):
+            event_json = event.model_dump_json(exclude_none=True, by_alias=True)
+            await websocket.send_text(event_json)
+
+    # Run both tasks concurrently
+    upstream = asyncio.create_task(upstream_task())
+    downstream = asyncio.create_task(downstream_task())
+    
+    try:
+        done, pending = await asyncio.wait(
+            [upstream, downstream],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        for task in done:
+            task.result()  # Raises any exception that occurred in the completed task
+    except WebSocketDisconnect:
+        logger.debug("Client disconnected normally (WebSocketDisconnect)")
+    except RuntimeError as e:
+        if "Cannot call \"receive\" once a disconnect message has been received" in str(e):
+            logger.debug("Client disconnected normally (RuntimeError from Starlette)")
+        else:
+            logger.error(f"Unexpected RuntimeError: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Unexpected error in streaming tasks: {e}", exc_info=True)
+    finally:
+        live_request_queue.close()

@@ -1,0 +1,27 @@
+{
+    "manifest_version": 3,
+    "name": "Kaline Zephyr Live Agent",
+    "version": "1.0.0",
+    "description": "Assistant multimodal en direct via Side Panel.",
+    "permissions": [
+        "sidePanel",
+        "tabs",
+        "activeTab",
+        "audio"
+    ],
+    "host_permissions": [
+        "<all_urls>"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "action": {
+        "default_title": "Ouvrir l'assistant"
+    },
+    "side_panel": {
+        "default_path": "index.html"
+    },
+    "icons": {
+        "128": "icon-128.png"
+    }
+}
