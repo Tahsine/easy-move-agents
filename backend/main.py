@@ -19,6 +19,7 @@ load_dotenv(Path(__file__).parent / ".env.local")
 # Import agent after loading environment variables
 # pylint: disable=wrong-import-position
 from live_agents.agent import root_agent  # noqa: E402
+from live_agents import browser_state  # noqa: E402
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -45,8 +46,47 @@ session_service = InMemorySessionService()
 runner = Runner(app_name=APP_NAME, agent=root_agent, session_service=session_service)
 
 # ========================================
-# WebSocket Endpoint
+# Extension Connection
 # ========================================
+
+
+@app.websocket("/ws/extension")
+async def extension_endpoint(websocket: WebSocket) -> None:
+    """Endpoint for the Chrome extension to connect to."""
+    await websocket.accept()
+    browser_state.active_extensions.add(websocket)
+    logger.info(f"✅ Extension connectée. (Total: {len(browser_state.active_extensions)})")
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+                if msg.get("type") == "heartbeat":
+                    continue
+
+                # If it's a result for a pending Python request (navigate, get_context, etc.)
+                req_id = msg.get("request_id")
+                if req_id and req_id in browser_state.pending_requests:
+                    future = browser_state.pending_requests.get(req_id)
+                    if future and not future.done():
+                        future.set_result(msg)
+
+                logger.debug(f"📩 Reçu de l'extension: {msg.get('type', 'unknown') or msg.get('tool', 'unknown')}")
+            except Exception:
+                logger.debug(f"📩 Reçu de l'extension (raw): {data[:100]}")
+    except WebSocketDisconnect:
+        logger.debug("❌ Extension déconnectée proprement")
+    except Exception as e:
+        logger.error(f"❌ Erreur WebSocket Extension: {e}")
+    finally:
+        browser_state.active_extensions.discard(websocket)
+        logger.debug(f"❌ Extension déconnectée. (Restant: {len(browser_state.active_extensions)})")
+
+
+# ========================================
+# WebSocket Endpoint (React Client)
+# ========================================
+
 
 @app.websocket("/ws/{user_id}/{session_id}")
 async def websocket_endpoint(
@@ -56,53 +96,30 @@ async def websocket_endpoint(
     proactivity: bool = False,
     affective_dialog: bool = False,
 ) -> None:
-    """WebSocket endpoint for bidirectional streaming with ADK.
-
-    Args:
-        websocket: The WebSocket connection
-        user_id: User identifier
-        session_id: Session identifier
-        proactivity: Enable proactive audio (native audio models only)
-        affective_dialog: Enable affective dialog (native audio models only)
-    """
-    logger.debug(
-        f"WebSocket connection request: user_id={user_id}, session_id={session_id}, "
-        f"proactivity={proactivity}, affective_dialog={affective_dialog}"
-    )
+    """WebSocket endpoint for bidirectional streaming with ADK."""
+    logger.debug(f"React connection: user_id={user_id}, session_id={session_id}")
     await websocket.accept()
-    logger.debug("WebSocket connection accepted")
 
-    # ========================================
-    # Phase 2: Session Initialization (once per streaming session)
-    # ========================================
-
-    # Automatically determine response modality based on model architecture
+    # Determine modalities based on model type
     model_name = root_agent.model
     is_native_audio = "native-audio" in model_name.lower()
 
     if is_native_audio:
-        response_modalities = ["AUDIO"]
         run_config = RunConfig(
             streaming_mode=StreamingMode.BIDI,
-            response_modalities=response_modalities,
+            response_modalities=["AUDIO"],
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
-            session_resumption=types.SessionResumptionConfig(),
             proactivity=(
                 types.ProactivityConfig(proactive_audio=True) if proactivity else None
             ),
             enable_affective_dialog=affective_dialog if affective_dialog else None,
         )
     else:
-        response_modalities = ["TEXT"]
         run_config = RunConfig(
             streaming_mode=StreamingMode.BIDI,
-            response_modalities=response_modalities,
-            input_audio_transcription=None,
-            output_audio_transcription=None,
-            session_resumption=types.SessionResumptionConfig(),
+            response_modalities=["TEXT"],
         )
-    logger.debug(f"RunConfig created: {run_config}")
 
     # Get or create session
     session = await session_service.get_session(
@@ -121,26 +138,18 @@ async def websocket_endpoint(
 
     async def upstream_task() -> None:
         """Receives messages from WebSocket and sends to LiveRequestQueue."""
-        logger.debug("upstream_task started")
         while True:
-            # Receive message from WebSocket (text or binary)
             message = await websocket.receive()
 
-            # Handle binary frames (audio data)
             if "bytes" in message:
-                audio_data = message["bytes"]
-                logger.debug(f"Received binary audio chunk: {len(audio_data)} bytes")
                 audio_blob = types.Blob(
-                    mime_type="audio/pcm;rate=16000", data=audio_data
+                    mime_type="audio/pcm;rate=16000", data=message["bytes"]
                 )
                 live_request_queue.send_realtime(audio_blob)
 
-            # Handle text frames (JSON messages)
             elif "text" in message:
-                text_data = message["text"]
-                json_message = json.loads(text_data)
+                json_message = json.loads(message["text"])
 
-                # Extract text from JSON and send to LiveRequestQueue
                 if json_message.get("type") == "text":
                     content = types.Content(
                         parts=[types.Part(text=json_message["text"])]
@@ -148,8 +157,6 @@ async def websocket_endpoint(
                     live_request_queue.send_content(content)
                 elif json_message.get("type") == "interrupt":
                     live_request_queue.interrupt()
-
-                # Handle image data
                 elif json_message.get("type") == "image":
                     image_data = base64.b64decode(json_message["data"])
                     mime_type = json_message.get("mimeType", "image/jpeg")
@@ -158,41 +165,22 @@ async def websocket_endpoint(
 
     async def downstream_task() -> None:
         """Receives Events from run_live() and sends to WebSocket."""
-        logger.debug("downstream_task started, calling runner.run_live()")
         async for event in runner.run_live(
             user_id=user_id,
             session_id=session_id,
             live_request_queue=live_request_queue,
             run_config=run_config,
         ):
-            event_json = event.model_dump_json(exclude_none=True, by_alias=True)
-            await websocket.send_text(event_json)
+            await websocket.send_text(
+                event.model_dump_json(exclude_none=True, by_alias=True)
+            )
 
-    # Run both tasks concurrently
-    upstream = asyncio.create_task(upstream_task())
-    downstream = asyncio.create_task(downstream_task())
-    
     try:
-        done, pending = await asyncio.wait(
-            [upstream, downstream],
-            return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in pending:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        for task in done:
-            task.result()  # Raises any exception that occurred in the completed task
+        await asyncio.gather(upstream_task(), downstream_task())
     except WebSocketDisconnect:
-        logger.debug("Client disconnected normally (WebSocketDisconnect)")
-    except RuntimeError as e:
-        if "Cannot call \"receive\" once a disconnect message has been received" in str(e):
-            logger.debug("Client disconnected normally (RuntimeError from Starlette)")
-        else:
-            logger.error(f"Unexpected RuntimeError: {e}", exc_info=True)
+        logger.debug("Client disconnected normally")
     except Exception as e:
         logger.error(f"Unexpected error in streaming tasks: {e}", exc_info=True)
     finally:
         live_request_queue.close()
+        logger.info(f"React session {session_id} finished.")

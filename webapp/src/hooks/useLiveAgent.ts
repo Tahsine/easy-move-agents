@@ -279,7 +279,7 @@ export function useLiveAgent() {
                 }
             }
         }
-    }, [stopAudio]);
+    }, [stopAudio, isRecording]);
 
     const disconnect = useCallback(() => {
         setIsConnected(false);

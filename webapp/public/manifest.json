@@ -7,10 +7,23 @@
         "sidePanel",
         "tabs",
         "activeTab",
-        "audio"
+        "audio",
+        "webNavigation",
+        "alarms"
     ],
     "host_permissions": [
         "<all_urls>"
+    ],
+    "content_scripts": [
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "js": [
+                "content_script.js"
+            ],
+            "run_at": "document_end"
+        }
     ],
     "background": {
         "service_worker": "background.js"
