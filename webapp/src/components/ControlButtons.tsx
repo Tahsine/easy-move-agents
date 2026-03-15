@@ -1,69 +1,33 @@
 import React from 'react';
-import { Mic, MicOff, Monitor, MonitorOff, Globe } from 'lucide-react';
+import { Mic, MicOff } from 'lucide-react';
 
 interface ControlButtonsProps {
     micEnabled: boolean;
     onToggleMic: () => void;
-    screenShareEnabled: boolean;
-    onToggleScreen: () => void;
-    webInteractionEnabled: boolean;
-    onToggleWeb: () => void;
 }
 
 const ControlButtons: React.FC<ControlButtonsProps> = ({
     micEnabled,
     onToggleMic,
-    screenShareEnabled,
-    onToggleScreen,
-    webInteractionEnabled,
-    onToggleWeb
 }) => {
     return (
-        <div className="h-[70px] w-full flex items-center justify-center gap-6 bg-[#080808]">
-            {/* Micro Button */}
+        <div className="h-[80px] w-full flex items-center justify-center bg-[#080808]">
+            {/* Micro Button — Primary action */}
             <button
                 onClick={onToggleMic}
                 className={`
-                    w-[52px] h-[52px] rounded-full flex items-center justify-center transition-all duration-200 border
+                    w-[60px] h-[60px] rounded-full flex items-center justify-center transition-all duration-300 border-2
                     ${micEnabled
-                        ? 'bg-[rgba(255,255,255,0.07)] border-[rgba(255,255,255,0.1)] hover:bg-[rgba(255,255,255,0.12)]'
-                        : 'bg-[rgba(255,60,60,0.15)] border-[#FF3C3C] hover:bg-[rgba(255,60,60,0.25)] text-[#FF3C3C]'
+                        ? 'bg-white/5 border-white/20 hover:bg-white/10 hover:border-white/30 hover:scale-105 text-white shadow-[0_0_20px_rgba(255,255,255,0.05)]'
+                        : 'bg-red-500/15 border-red-500 hover:bg-red-500/25 text-red-500 shadow-[0_0_20px_rgba(255,60,60,0.1)]'
                     }
                 `}
             >
                 {micEnabled ? (
-                    <Mic size={22} className="text-white" />
+                    <Mic size={24} />
                 ) : (
-                    <MicOff size={22} />
+                    <MicOff size={24} />
                 )}
-            </button>
-
-            {/* Screen Share Button */}
-            <button
-                onClick={onToggleScreen}
-                className={`
-                    w-[52px] h-[52px] rounded-full flex items-center justify-center transition-all duration-200 border
-                    ${screenShareEnabled
-                        ? 'bg-[rgba(59,139,255,0.2)] border-[#3B8BFF] text-[#3B8BFF]'
-                        : 'bg-[rgba(255,255,255,0.07)] border-[rgba(255,255,255,0.1)] hover:bg-[rgba(255,255,255,0.12)] text-white/50'
-                    }
-                `}
-            >
-                {screenShareEnabled ? <Monitor size={22} /> : <MonitorOff size={22} />}
-            </button>
-
-            {/* Web Interaction Button */}
-            <button
-                onClick={onToggleWeb}
-                className={`
-                    w-[52px] h-[52px] rounded-full flex items-center justify-center transition-all duration-200 border
-                    ${webInteractionEnabled
-                        ? 'bg-[rgba(59,139,255,0.2)] border-[#3B8BFF] text-[#3B8BFF]'
-                        : 'bg-[rgba(255,255,255,0.07)] border-[rgba(255,255,255,0.1)] hover:bg-[rgba(255,255,255,0.12)] text-white/50'
-                    }
-                `}
-            >
-                <Globe size={22} />
             </button>
         </div>
     );

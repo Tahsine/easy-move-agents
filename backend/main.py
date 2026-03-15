@@ -110,6 +110,7 @@ async def websocket_endpoint(
             response_modalities=["AUDIO"],
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
+            session_resumption=types.SessionResumptionConfig(),
             proactivity=(
                 types.ProactivityConfig(proactive_audio=True) if proactivity else None
             ),
@@ -119,6 +120,7 @@ async def websocket_endpoint(
         run_config = RunConfig(
             streaming_mode=StreamingMode.BIDI,
             response_modalities=["TEXT"],
+            session_resumption=types.SessionResumptionConfig(),
         )
 
     # Get or create session

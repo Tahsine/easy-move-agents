@@ -84,7 +84,26 @@ function connectToBackend() {
             // Forward other tools to content script
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
             if (tab && tab.id) {
-                chrome.tabs.sendMessage(tab.id, message);
+                try {
+                    await chrome.tabs.sendMessage(tab.id, message);
+                } catch (e) {
+                    console.warn("[Background] Content script not ready, retrying in 1s...", e.message);
+                    // Wait 1s and retry once (content script may still be loading)
+                    await new Promise(r => setTimeout(r, 1000));
+                    try {
+                        await chrome.tabs.sendMessage(tab.id, message);
+                    } catch (e2) {
+                        console.error("[Background] Content script unreachable after retry:", e2.message);
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: "result",
+                                request_id,
+                                status: "error",
+                                error: "Le content script n'est pas chargé sur cette page. Essaie de naviguer vers une page web standard."
+                            }));
+                        }
+                    }
+                }
             } else {
                 ws.send(JSON.stringify({ type: "result", request_id, status: "error", error: "Onglet actif non trouvé pour l'action" }));
             }

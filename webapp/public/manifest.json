@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
-    "name": "Kaline Zephyr Live Agent",
+    "name": "Easy Move - Live Web Agent",
     "version": "1.0.0",
-    "description": "Assistant multimodal en direct via Side Panel.",
+    "description": "Voice-controlled web navigation agent powered by Gemini Live API.",
     "permissions": [
         "sidePanel",
         "tabs",

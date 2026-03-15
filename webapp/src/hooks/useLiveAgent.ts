@@ -154,12 +154,47 @@ export function useLiveAgent() {
                     }
                 }
 
-                // Handle Output Transcription (Agent fallback/extra)
+                // Handle Output Transcription (Agent speech text)
                 if (data.output_transcription) {
                     const transcription = data.output_transcription;
                     if (transcription.text) {
                         setSpeakingState('agent');
-                        // Logic similar to part.text but for explicit transcription events
+                        setMessages(prev => {
+                            const lastMsg = prev[prev.length - 1];
+                            if (lastMsg && lastMsg.role === "assistant" && !lastMsg.content.includes("[Interrompu]")) {
+                                return [...prev.slice(0, -1), { ...lastMsg, content: lastMsg.content + transcription.text }];
+                            }
+                            return [...prev, { id: "agent-" + Date.now(), role: "assistant", content: transcription.text, timestamp: Date.now() }];
+                        });
+                    }
+                }
+
+                // Handle tool call events — show action indicators
+                if (data.content?.parts) {
+                    for (const part of data.content.parts) {
+                        const fc = part.functionCall || part.function_call;
+                        if (fc) {
+                            const toolIcons: Record<string, string> = {
+                                navigate: '🌐', click_element: '🖱️', type_text: '⌨️',
+                                scroll: '📜', get_page_context: '🔍', press_key: '⌨️'
+                            };
+                            const icon = toolIcons[fc.name] || '🔧';
+                            const args = fc.args || {};
+                            let label = fc.name;
+                            if (fc.name === 'navigate') label = `Navigating to ${args.url || '...'}`;
+                            else if (fc.name === 'click_element') label = `Clicking ${args.selector || '...'}`;
+                            else if (fc.name === 'type_text') label = `Typing "${args.text || '...'}"`;
+                            else if (fc.name === 'get_page_context') label = 'Reading page...';
+                            else if (fc.name === 'scroll') label = `Scrolling ${args.direction || 'down'}`;
+                            else if (fc.name === 'press_key') label = `Pressing ${args.key || '...'}`;
+
+                            setMessages(prev => [...prev, {
+                                id: "action-" + Date.now(),
+                                role: "system",
+                                content: `${icon} ${label}`,
+                                timestamp: Date.now()
+                            }]);
+                        }
                     }
                 }
 

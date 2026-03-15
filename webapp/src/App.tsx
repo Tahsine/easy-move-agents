@@ -12,10 +12,6 @@ function App() {
     speakingState,
     micEnabled,
     setMicEnabled,
-    screenShareEnabled,
-    setScreenShareEnabled,
-    webInteractionEnabled,
-    setWebInteractionEnabled,
     needsPermission,
     connect,
     disconnect,
@@ -47,7 +43,7 @@ function App() {
       <header className="h-[50px] flex items-center justify-between px-6 border-b border-white/5 shrink-0">
         <div className="flex items-center gap-3">
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-          <h1 className="text-[14px] font-semibold tracking-tight text-white/90">Kaline Zephyr</h1>
+          <h1 className="text-[14px] font-semibold tracking-tight text-white/90">Easy Move</h1>
         </div>
 
         <button
@@ -85,17 +81,14 @@ function App() {
         <ControlButtons
           micEnabled={micEnabled}
           onToggleMic={() => setMicEnabled(!micEnabled)}
-          screenShareEnabled={screenShareEnabled}
-          onToggleScreen={() => setScreenShareEnabled(!screenShareEnabled)}
-          webInteractionEnabled={webInteractionEnabled}
-          onToggleWeb={() => setWebInteractionEnabled(!webInteractionEnabled)}
         />
       </main>
 
       {/* Footer / Status Bar - Optional */}
-      <footer className="h-[20px] bg-black/50 border-t border-white/5 flex items-center px-4 justify-between">
-        <span className="text-[9px] text-white/20 uppercase tracking-widest font-bold">Live Bidi Session</span>
-        <span className="text-[9px] text-white/20 uppercase tracking-widest font-bold">16k / 24k PCM</span>
+      <footer className="h-[24px] bg-black/50 border-t border-white/5 flex items-center px-4 justify-center">
+        <span className="text-[9px] text-white/20 uppercase tracking-widest font-medium">
+          Easy Move {isConnected ? '• Connected' : '• Disconnected'}
+        </span>
       </footer>
     </div>
   );
